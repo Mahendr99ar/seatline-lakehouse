@@ -1,0 +1,22 @@
+{
+  "name": "src",
+  "config": {
+    "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
+    "database.hostname": "source-db",
+    "database.port": "5432",
+    "database.user": "debezium",
+    "database.password": "${env:DEBEZIUM_PASSWORD}",
+    "database.dbname": "airline",
+    "topic.prefix": "src",
+    "plugin.name": "pgoutput",
+    "publication.name": "lakehouse",
+    "publication.autocreate.mode": "disabled",
+    "slot.name": "lakehouse",
+    "table.include.list": "public.flights,public.fares,public.bookings",
+    "snapshot.mode": "initial",
+    "tombstones.on.delete": "false",
+    "decimal.handling.mode": "string",
+    "heartbeat.interval.ms": "10000",
+    "heartbeat.action.query": "UPDATE _heartbeat SET at = now() WHERE id = 1"
+  }
+}

@@ -1,0 +1,210 @@
+# Seatline Lakehouse, the whole pipeline on one machine.
+#
+#   cp .env.example .env    # then set the passwords
+#   docker compose up -d --build
+#
+# The memory limits are ceilings, not reservations; they add up to more than
+# a 4 GB host has, and rely on not every service peaking at once (plus swap).
+# Nothing listens on a public interface: the Airflow UI is on 127.0.0.1:8090
+# (reach it over an SSH tunnel) and the dashboard is static files that a web
+# server on the host serves from ./dashboard.
+
+x-lake-env: &lake-env
+  AWS_ACCESS_KEY_ID: ${MINIO_USER}
+  AWS_SECRET_ACCESS_KEY: ${MINIO_PASSWORD}
+  AWS_REGION: us-east-1
+  CATALOG_PASSWORD: ${CATALOG_PASSWORD}
+
+services:
+  source-db:
+    image: postgres:16
+    command: >
+      postgres -c wal_level=logical -c max_replication_slots=4 -c max_wal_senders=4
+               -c max_slot_wal_keep_size=2GB
+    environment:
+      POSTGRES_USER: airline
+      POSTGRES_PASSWORD: ${SOURCE_PASSWORD}
+      POSTGRES_DB: airline
+      DEBEZIUM_PASSWORD: ${DEBEZIUM_PASSWORD}
+    volumes:
+      - ./source/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      - ./source/roles.sh:/docker-entrypoint-initdb.d/02-roles.sh:ro
+      - source-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U airline -d airline"]
+      interval: 5s
+      retries: 20
+    mem_limit: 256m
+    restart: unless-stopped
+
+  traffic:
+    build: { context: ., dockerfile: docker/traffic/Dockerfile }
+    environment:
+      SOURCE_DSN: postgresql://airline:${SOURCE_PASSWORD}@source-db/airline
+      TICK_SLEEP: ${TICK_SLEEP:-3}
+    depends_on:
+      source-db: { condition: service_healthy }
+    mem_limit: 96m
+    restart: unless-stopped
+
+  kafka:
+    image: apache/kafka:3.8.0
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_NUM_PARTITIONS: 3
+      KAFKA_LOG_RETENTION_HOURS: 168
+      KAFKA_HEAP_OPTS: -Xms256m -Xmx384m
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null"]
+      interval: 10s
+      retries: 20
+    mem_limit: 640m
+    restart: unless-stopped
+
+  connect:
+    image: quay.io/debezium/connect:2.7.3.Final
+    environment:
+      BOOTSTRAP_SERVERS: kafka:9092
+      GROUP_ID: lakehouse
+      CONFIG_STORAGE_TOPIC: _connect_configs
+      OFFSET_STORAGE_TOPIC: _connect_offsets
+      STATUS_STORAGE_TOPIC: _connect_status
+      CONFIG_STORAGE_REPLICATION_FACTOR: 1
+      OFFSET_STORAGE_REPLICATION_FACTOR: 1
+      STATUS_STORAGE_REPLICATION_FACTOR: 1
+      KEY_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      CONNECT_KEY_CONVERTER_SCHEMAS_ENABLE: "false"
+      CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE: "false"
+      # Lets the connector config say ${env:DEBEZIUM_PASSWORD} instead of
+      # storing the password in the _connect_configs topic.
+      CONNECT_CONFIG_PROVIDERS: env
+      CONNECT_CONFIG_PROVIDERS_ENV_CLASS: org.apache.kafka.common.config.provider.EnvVarConfigProvider
+      DEBEZIUM_PASSWORD: ${DEBEZIUM_PASSWORD}
+      HEAP_OPTS: -Xms256m -Xmx512m
+    depends_on:
+      kafka: { condition: service_healthy }
+      source-db: { condition: service_healthy }
+    mem_limit: 768m
+    restart: unless-stopped
+
+  connect-init:
+    image: curlimages/curl:8.10.1
+    entrypoint: ["/bin/sh", "/connect/register.sh"]
+    volumes:
+      - ./connect:/connect:ro
+    depends_on: [connect]
+    restart: "no"
+
+  minio:
+    image: minio/minio:RELEASE.2024-10-13T13-34-11Z
+    command: server /data
+    environment:
+      MINIO_ROOT_USER: ${MINIO_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_PASSWORD}
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      retries: 20
+    mem_limit: 256m
+    restart: unless-stopped
+
+  minio-init:
+    image: minio/mc:RELEASE.2024-10-08T09-37-26Z
+    entrypoint: >
+      /bin/sh -c "mc alias set local http://minio:9000 $${MINIO_USER} $${MINIO_PASSWORD}
+                  && mc mb --ignore-existing local/lake"
+    environment:
+      MINIO_USER: ${MINIO_USER}
+      MINIO_PASSWORD: ${MINIO_PASSWORD}
+    depends_on:
+      minio: { condition: service_healthy }
+    restart: "no"
+
+  catalog-db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: iceberg
+      POSTGRES_PASSWORD: ${CATALOG_PASSWORD}
+      POSTGRES_DB: catalog
+    volumes:
+      - ./source/catalog-init.sh:/docker-entrypoint-initdb.d/01-airflow.sh:ro
+      - catalog-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U iceberg -d catalog"]
+      interval: 5s
+      retries: 20
+    mem_limit: 192m
+    restart: unless-stopped
+
+  spark-stream:
+    build: { context: ., dockerfile: docker/spark/Dockerfile }
+    environment:
+      <<: *lake-env
+      KAFKA_BOOTSTRAP: kafka:9092
+      TRIGGER_INTERVAL: 30 seconds
+    volumes:
+      - ivy-spark:/opt/ivy
+      - checkpoints:/checkpoints
+    depends_on:
+      kafka: { condition: service_healthy }
+      catalog-db: { condition: service_healthy }
+      minio-init: { condition: service_completed_successfully }
+    mem_limit: 1200m
+    restart: unless-stopped
+
+  airflow:
+    build: { context: ., dockerfile: docker/airflow/Dockerfile }
+    command: standalone
+    user: "${AIRFLOW_UID:-50000}:0"
+    environment:
+      <<: *lake-env
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://iceberg:${CATALOG_PASSWORD}@catalog-db/airflow
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      # One task at a time: each one starts a Spark JVM.
+      AIRFLOW__CORE__PARALLELISM: 1
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__WEBSERVER__WORKERS: 1
+      # The image's entrypoint migrates the database and creates this user
+      # before `standalone` starts.
+      _AIRFLOW_DB_MIGRATE: "true"
+      _AIRFLOW_WWW_USER_CREATE: "true"
+      _AIRFLOW_WWW_USER_USERNAME: admin
+      _AIRFLOW_WWW_USER_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD}
+      DASHBOARD_DATA: /dashboard/data.json
+      SPARK_DRIVER_MEMORY: 700m
+    ports:
+      - "127.0.0.1:8090:8080"
+    volumes:
+      - ivy-airflow:/opt/ivy
+      - ./dashboard:/dashboard
+      - ./airflow/dags:/opt/airflow/dags:ro
+      - airflow-logs:/opt/airflow/logs
+    depends_on:
+      catalog-db: { condition: service_healthy }
+      minio-init: { condition: service_completed_successfully }
+    mem_limit: 1600m
+    restart: unless-stopped
+
+volumes:
+  source-data:
+  kafka-data:
+  minio-data:
+  catalog-data:
+  ivy-spark:
+  ivy-airflow:
+  checkpoints:
+  airflow-logs:

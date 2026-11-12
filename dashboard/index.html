@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Seatline Lakehouse</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@500;600;700&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <div class="wrap top-row">
+    <a class="mark" href="#">Seatline Lakehouse</a>
+    <p class="top-note" id="span">Loading the lake export</p>
+    <button class="theme" id="theme" type="button" aria-label="Switch colour theme">Dark</button>
+  </div>
+</header>
+
+<main class="wrap">
+  <section class="hero" aria-labelledby="hero-title">
+    <div class="hero-copy">
+      <h1 id="hero-title">The booking database keeps one price per fare. The lake keeps <span id="hero-count">all of them</span>.</h1>
+      <p class="lede">Every insert, update and delete on the airline's Postgres is read from the write-ahead log by Debezium, carried through Kafka and written by Spark into Iceberg tables. Nothing the source overwrites is lost. Move along the chart to see this fare at any moment of its life.</p>
+      <dl class="readout" id="readout" aria-live="polite"></dl>
+    </div>
+    <figure class="hero-chart">
+      <figcaption id="story-caption"></figcaption>
+      <div id="story" class="chart chart-hero"></div>
+    </figure>
+  </section>
+
+  <ol class="flow" id="flow" aria-label="Pipeline"></ol>
+
+  <div class="grid">
+    <section class="strip span-7" data-layer="gold">
+      <div class="band"><b>Gold</b><span>fare_curve</span></div>
+      <div class="body">
+        <h2>Prices climb in the last twelve hours</h2>
+        <p class="sub">Average fare as a multiple of the flight's opening price, by hours left before departure. Each price counts for every hour it was on sale.</p>
+        <div id="curve" class="chart"></div>
+        <details><summary>Show as a table</summary><div id="curve-table"></div></details>
+      </div>
+    </section>
+
+    <section class="strip span-5" data-layer="history">
+      <div class="band"><b>History</b><span>load_factor</span></div>
+      <div class="body">
+        <h2>How full each route was, and when</h2>
+        <p class="sub">Share of seats sold 72 h, 24 h and at departure. Only the last number exists in the source; the other two are read from SCD2 versions.</p>
+        <div id="load" class="chart"></div>
+      </div>
+    </section>
+
+    <section class="strip span-12" data-layer="gold">
+      <div class="band"><b>Gold</b><span>route_daily</span></div>
+      <div class="body">
+        <h2>Confirmed revenue by route and booking day</h2>
+        <p class="sub">Indian rupees, lakh. Days are IST; the first and last are partial because the simulated run starts and stops at midnight UTC.</p>
+        <div id="heat" class="chart"></div>
+      </div>
+    </section>
+
+    <section class="strip span-6" data-layer="history">
+      <div class="band"><b>History</b><span>booking_funnel</span></div>
+      <div class="body">
+        <h2>What happened to every hold</h2>
+        <p class="sub">Expired holds are deleted from the source after a day. Current state would miss them; the history does not.</p>
+        <div id="funnel" class="chart"></div>
+        <details><summary>Show as a table</summary><div id="funnel-table"></div></details>
+      </div>
+    </section>
+
+    <section class="strip span-6" data-layer="history">
+      <div class="band"><b>History</b><span>delays</span></div>
+      <div class="body">
+        <h2>Delays against the first published time</h2>
+        <p class="sub">The source only knows the latest departure time. The delay is measured from the first version of each flight.</p>
+        <div id="delays"></div>
+      </div>
+    </section>
+
+    <section class="strip span-12" data-layer="bronze">
+      <div class="band"><b>Bronze</b><span>changes</span></div>
+      <div class="body">
+        <h2>Change events per hour</h2>
+        <p class="sub">By operation, in simulated business time (IST). The daily spikes are the next week's flights being scheduled at midnight UTC.</p>
+        <div id="volume" class="chart"></div>
+      </div>
+    </section>
+
+    <section class="strip span-12" data-layer="ops">
+      <div class="band"><b>Checks</b><span>dq_results</span></div>
+      <div class="body">
+        <h2>Data quality, last run</h2>
+        <p class="sub">A failed check stops the gold run, so these pages keep the last numbers that passed.</p>
+        <ul id="checks" class="checks"></ul>
+      </div>
+    </section>
+  </div>
+</main>
+
+<footer class="wrap foot">
+  <p id="generated"></p>
+  <p>Bookings come from a deterministic simulator, not a real airline. Source on <a href="https://github.com/Mahendr99ar/seatline-lakehouse">GitHub</a>.</p>
+</footer>
+
+<div id="tip" class="tip" role="status" hidden></div>
+<script src="app.js"></script>
+</body>
+</html>

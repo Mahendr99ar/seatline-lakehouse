@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "seatline-lakehouse"
+version = "0.1.0"
+description = "Change data capture from Postgres into an Iceberg lakehouse with full history"
+requires-python = ">=3.10"
+dependencies = ["pyspark==3.5.3"]
+
+[project.optional-dependencies]
+dev = ["pytest", "ruff", "psycopg[binary]>=3.2"]
+traffic = ["psycopg[binary]>=3.2"]
+
+[tool.setuptools]
+packages = ["lakehouse", "traffic", "devtools"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.ruff.lint.isort]
+known-third-party = ["airflow"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
