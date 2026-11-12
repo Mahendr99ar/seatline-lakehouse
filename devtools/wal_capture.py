@@ -22,6 +22,7 @@ import json
 import re
 import time
 import zlib
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import psycopg
@@ -50,6 +51,9 @@ def parse_tuple(text: str) -> dict:
         else:
             row[name] = raw
     return row
+
+
+PG_TS = re.compile(r"(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2})(?:\.(\d+))?([+-])(\d{2})(?::?(\d{2}))?")
 
 
 def iso_timestamp(pg: str) -> str:
@@ -149,9 +153,17 @@ class Capture:
 
 
 def _ms(pg_ts: str) -> int:
-    from datetime import datetime
-
-    return int(datetime.fromisoformat(pg_ts).timestamp() * 1000)
+    """Commit time from test_decoding ('2026-11-12 11:39:42.776271+00') in
+    epoch milliseconds. Parsed by hand: before Python 3.11, fromisoformat
+    rejects both a '+00' offset and fractions that are not 3 or 6 digits."""
+    m = PG_TS.fullmatch(pg_ts)
+    if m is None:
+        raise ValueError(f"unexpected commit timestamp {pg_ts!r}")
+    date, time_, frac, sign, hh, mm = m.groups()
+    base = datetime.strptime(f"{date} {time_}", "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+    offset = timedelta(hours=int(hh), minutes=int(mm or 0)) * (1 if sign == "+" else -1)
+    micros = int((frac or "0").ljust(6, "0")[:6])
+    return int((base - offset).timestamp() * 1000) + micros // 1000
 
 
 def main() -> None:

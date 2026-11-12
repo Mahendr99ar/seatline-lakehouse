@@ -108,7 +108,7 @@ Measured on one run of the simulator: 2,016 ticks of 5 simulated minutes (1 to 8
 | Confirmed revenue in `route_daily` | ₹12,15,62,183 |
 | Bronze to gold, local mode, 2 cores | 30.6 s and 32.4 s on two runs |
 | Lake vs source after 450 ticks | identical, row for row, all three tables (`tests/test_end_to_end.py`) |
-| Tests | 24 passing |
+| Tests | 25 passing (Python 3.10, the CI version) |
 
 The local figures come from `devtools/local_run.py`, which runs the same Spark functions on changes captured by `devtools/wal_capture.py` instead of Debezium. Throughput and memory on the full Kafka, Debezium and Iceberg stack have not been measured yet; [deploy/ec2.md](deploy/ec2.md) says how, and this table will get those rows when they exist.
 

@@ -33,3 +33,11 @@ def test_lsn_and_time_formats():
     assert lsn_to_int("0/8810A40") == 0x8810A40
     assert lsn_to_int("1/0") == 1 << 32
     assert iso_timestamp("2026-11-01 00:05:00.25+00") == "2026-11-01T00:05:00.25Z"
+
+
+def test_commit_time_parsing_works_before_python_311():
+    from devtools.wal_capture import _ms
+
+    assert _ms("2026-11-12 11:39:42.776271+00") == 1794483582776
+    assert _ms("2026-11-12 11:39:42.5+00") == 1794483582500
+    assert _ms("2026-11-12 17:09:42+05:30") == 1794483582000
